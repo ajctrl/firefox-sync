@@ -35,6 +35,7 @@ on:
       - upstream-patches.yml
       - upstream-patches/**
       - .github/scripts/upstream-patches.py
+      - .github/scripts/fxa-prune.sh
 
 concurrency:
   # per branch: a branch run never cancels or waits for main's. A newer push to a branch cancels
@@ -58,6 +59,7 @@ jobs:
       version: ${{ steps.version.outputs.version }}
       build: ${{ steps.existing.outputs.build }}
       patches: ${{ steps.patches.outputs.label }}
+      prune_recipe: ${{ steps.existing.outputs.prune_recipe }}
       patches_obsolete: ${{ steps.patches.outputs.obsolete_json }}
       patches_present: ${{ steps.existing.outputs.present }}
       pairing_version: ${{ steps.pairing.outputs.version }}
@@ -104,7 +106,9 @@ jobs:
         env:
           REBUILD: ${{ inputs.rebuild }}
           PATCHES: ${{ steps.patches.outputs.label }}
+          PRUNE_RECIPE: ${{ hashFiles('.github/scripts/fxa-prune.sh') }}
         run: |
+          echo "prune_recipe=${PRUNE_RECIPE}" >> "${GITHUB_OUTPUT}"
           image="${{ env.REPOSITORY_REGISTRY }}/${{ env.REPOSITORY_FULL_NAME }}:fxa-mono-${{ steps.version.outputs.version }}"
           if [ "${REBUILD}" != true ] && config=$(docker buildx imagetools inspect "${image}" --format '{{json .Image}}' 2> /dev/null); then
             # the image of an index is per platform; built before upstream-patches.yml: unlabelled.
@@ -113,7 +117,8 @@ jobs:
             labels=$(jq -c 'if has("config") then . else .["linux/amd64"] end | .config.Labels // {}' <<< "${config}")
             planned=$(jq -r '.["org.firefox-sync.upstream-patches-plan"] // "unlabelled"' <<< "${labels}")
             applied=$(jq -r '.["org.firefox-sync.upstream-patches"] // "unlabelled"' <<< "${labels}")
-            if [ "${planned}" = "${PATCHES}" ]; then
+            recipe=$(jq -r '.["org.firefox-sync.fxa-prune"] // "unlabelled"' <<< "${labels}")
+            if [ "${planned}" = "${PATCHES}" ] && [ "${recipe}" = "${PRUNE_RECIPE}" ]; then
               echo "${image} exists (upstream patches: ${applied}, planned: ${planned}), nothing to build"
               echo "build=false" >> "${GITHUB_OUTPUT}"
               # planned but not applied: already in the sources, for the job upstream-patches.
@@ -126,7 +131,7 @@ jobs:
               echo "present=${present}" >> "${GITHUB_OUTPUT}"
               exit 0
             fi
-            echo "${image} was built for the upstream patches '${planned}', upstream-patches.yml '${PATCHES}': rebuilding it"
+            echo "Rebuilding ${image}: the upstream patch plan or the pruning recipe changed"
           fi
           echo "build=true" >> "${GITHUB_OUTPUT}"
 
@@ -282,6 +287,7 @@ jobs:
             upstream-patches.yml
             upstream-patches/
             .github/scripts/upstream-patches.py
+            .github/scripts/fxa-prune.sh
           sparse-checkout-cone-mode: false
 
       - name: Apply the upstream patches
@@ -290,6 +296,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 ffs/.github/scripts/upstream-patches.py apply fxa-mono "${{ needs.prepare.outputs.version }}" .
+          # After upstream's build and production install, before its final Docker stage.
+          test -f _dev/docker/mono/build.sh
+          { echo; cat ffs/.github/scripts/fxa-prune.sh; } >> _dev/docker/mono/build.sh
           # not in the image
           rm -rf ffs
           git status --short
@@ -325,6 +334,7 @@ jobs:
             org.opencontainers.image.licenses=MPL-2.0
             org.firefox-sync.upstream-patches=${{ steps.patches.outputs.label }}
             org.firefox-sync.upstream-patches-plan=${{ needs.prepare.outputs.patches }}
+            org.firefox-sync.fxa-prune=${{ needs.prepare.outputs.prune_recipe }}
 
       - name: Upload the image
         uses: actions/upload-artifact@v7
