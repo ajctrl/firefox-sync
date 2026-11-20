@@ -24,7 +24,7 @@ The images here are built as close to Mozilla's as possible. They add arm64, Mar
 - Architectures: amd64 and arm64.
 - `<release>` is syncstorage-rs' release tag. `<build date>` is the build's time, `YYYYMMDDTHHMMSS`: a weekly rebuild of the same release gets a new one.
 - Source: [mozilla-services/syncstorage-rs](https://github.com/mozilla-services/syncstorage-rs). Code changes: only the [upstream patches](#upstream-patches), in the two Sync server images. The init images change no upstream code.
-- The build fills in upstream's `version.json` (served at `/__version__`) and drops the cache mounts of the Dockerfile's cargo steps, so that the compiled dependencies are kept in the build cache ([syncstorage-rs-build.py](/.github/scripts/syncstorage-rs-build.py)). What is compiled and what the image contains stay the same.
+- The build fills in upstream's `version.json` (served at `/__version__`) and caches the compiled Cargo dependencies. The MySQL and PostgreSQL release builds strip DWARF debug information from the Sync server. pip installs from a read-only mount of the builder's wheels, so the runtime layers contain the installed Python packages without the wheel archives. [Build script](/.github/scripts/syncstorage-rs-build.py)
 - Built by [syncstorage-rs.yml](/.github/workflows/syncstorage-rs.yml) ([runs](https://github.com/porelli/firefox-sync/actions/workflows/syncstorage-rs.yml)).
 - Settings: `IMAGE_REPOSITORY`, `SYNC_IMAGE`, `SYNC_IMAGE_TAG`, `SYNC_INIT_IMAGE` and `SYNC_INIT_IMAGE_TAG`, see [Settings](settings.md#images).
 
@@ -32,13 +32,17 @@ The images here are built as close to Mozilla's as possible. They add arm64, Mar
 
 | Image | Tags | What it is |
 |---|---|---|
-| `fxa-mono` | `fxa-mono-latest`, `fxa-mono-<release>` (for example `fxa-mono-v1.349.0`) | Mozilla's accounts service, built from [its Dockerfile](https://github.com/mozilla/fxa/blob/main/_dev/docker/mono/Dockerfile), about 5 GB unpacked |
+| `fxa-mono` | `fxa-mono-latest`, `fxa-mono-<release>` (for example `fxa-mono-v1.349.0`) | Mozilla's accounts service, built from [its Dockerfile](https://github.com/mozilla/fxa/blob/main/_dev/docker/mono/Dockerfile) |
 | `fxa-channelserver` | `fxa-channelserver-latest`, `fxa-channelserver-<release>` | the optional pairing server for QR codes, built the same way from [Mozilla's channelserver](https://github.com/mozilla-services/channelserver) |
 
 - Architectures: amd64 and arm64, both tested before publishing. Mozilla publishes [`mozilla/fxa-mono`](https://hub.docker.com/r/mozilla/fxa-mono) for amd64 only.
 - `fxa-mono-latest` is the newest release that passed the tests on both architectures, including a real Firefox signing up and syncing, and an install of the previous release upgraded to it.
-- Source: [mozilla/fxa](https://github.com/mozilla/fxa). Code changes: only the [upstream patches](#upstream-patches).
+- Source: [mozilla/fxa](https://github.com/mozilla/fxa), with the [upstream patches](#upstream-patches). The [settings build patch](/.github/scripts/fxa-settings-sourcemap.patch) disables source maps for the production settings UI. If the patch no longer applies, the build logs a warning and uses Mozilla's settings.
 - Built by [fxa.yml](/.github/workflows/fxa.yml).
+- The fork runs a [cleanup script](/.github/scripts/fxa-prune.sh) in the builder before the final image is assembled. It keeps the production settings UI, drops its duplicate build output, development and staging assets, and bundle analysis reports. The stack runs neither the payments UI nor the payments API, so the script removes their build outputs, including the Next.js cache. It also removes Next.js's native Linux SWC compiler packages (`@next/swc-linux-*`), the Nx cache and the build-time Python environment. After the translations are built, it logs the size of `external/l10n/.git` in KiB and removes that directory if present. The translations and their recorded revision stay in the image. Auth retains its Next.js and Sentry runtime dependencies. Changes to the cleanup script or settings build patch trigger a rebuild of the same FxA release.
+- The cleanup script compares `packages/fxa-settings/public/locales` and `public/static/locales` under the same package with their respective copies in `fxa-content-server/dist/settings/prod`. For each identical directory tree, it logs the size in KiB and removes the build input. The content server serves the production copies.
+- After the production install, the cleanup script logs the sizes in KiB of the build caches it finds and removes them. These include the settings UI's webpack cache, the admin panel's or repository root's Babel loader cache, Yarn's `.yarn/install-state.gz`, and TypeScript and ESLint cache files in FxA's source and output directories.
+- To use this fork's accounts image after its workflow publishes it, set `FXA_IMAGE=ghcr.io/ajctrl/firefox-sync` in the existing Compose installation's `.env`.
 - Settings: `FXA_IMAGE`, `FXA_VERSION` (`fxa-mono-latest` by default) and `FXA_ARCH`. The pairing server follows `FXA_IMAGE` with the tag `FXA_PAIRING_VERSION` (`fxa-channelserver-latest`), or `FXA_PAIRING_REPOSITORY`, or a full `FXA_PAIRING_IMAGE` ([Settings](settings.md#accounts)).
 
 Mozilla's own image works too, on amd64:

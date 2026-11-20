@@ -14,9 +14,9 @@ This file is in the key of the images the workflow reuses: a change of it builds
   GitHub runner and no registry cache exports them, so the cooked layer came back from the
   build cache without the compiled dependencies and `cargo install` compiled them all again.
   Without the mounts they are in the layer itself, which the registry cache keeps (mode=max):
-  only syncstorage-rs' own crates compile while the recipe is the same. The image is the same
-  (only /app/bin and files of the sources leave the builder stage). When upstream's Dockerfile
-  has no such mount any more, a ::warning:: and nothing changed.
+  only syncstorage-rs' own crates compile while the recipe is the same.
+- The release build strips DWARF debug info. pip reads the builder's wheels through a
+  read-only BuildKit mount so the wheel archives never enter a runtime image layer.
 """
 
 import json
@@ -32,6 +32,25 @@ CACHE_MOUNT = re.compile(r"--mount=(?=[^\s]*\btype=cache\b)[^\s]+[ \t]*(?:\\\n[ 
 def drop_cache_mounts(text):
     """The Dockerfile without its cache mounts, and how many there were."""
     return CACHE_MOUNT.subn("", text)
+
+
+def mount_wheels(text):
+    """Replace the wheel COPY and its one consuming RUN together."""
+    instructions = re.split(r"(?<!\\)\n", text)
+    wheel_copy = "COPY --from=builder /app/wheels /tmp/wheels"
+    consumers = [line for line in instructions if "/tmp/wheels" in line and line != wheel_copy]
+    if instructions.count(wheel_copy) != 1 or len(consumers) != 1:
+        return text
+    install = consumers[0]
+    cleanup = "rm -rf /tmp/wheels /root/.cache/pip"
+    if not (install.startswith("RUN pip3 install ") and "--find-links=/tmp/wheels" in install
+            and install.endswith(cleanup)):
+        return text
+    mount = "RUN --mount=type=bind,from=builder,source=/app/wheels,target=/tmp/wheels"
+    pip = install.removeprefix("RUN ").removesuffix(cleanup)
+    instructions[instructions.index(install)] = f"{mount} {pip}rm -rf /root/.cache/pip"
+    instructions.remove(wheel_copy)
+    return "\n".join(instructions)
 
 
 def main(argv):
@@ -54,12 +73,20 @@ def main(argv):
     if count == 0:
         print("::warning title=syncstorage-rs-build.py::the Dockerfile has no cache mount (RUN --mount=type=cache) "
               "any more: nothing dropped, check how it caches the compiled dependencies now")
-        return 0
-    if "type=cache" in text:
+    elif "type=cache" in text:
         print(f"::error title=syncstorage-rs-build.py::a cache mount of the Dockerfile is left after dropping {count}")
         return 1
+    release_strip = "ENV CARGO_PROFILE_RELEASE_STRIP=debuginfo"
+    builder = re.search(r"^FROM [^\n]+ AS builder$", text, re.MULTILINE | re.IGNORECASE)
+    if not builder:
+        print("::warning::Cargo builder stage changed; check the release binary's debug info")
+    elif not text[builder.end():].startswith("\n" + release_strip + "\n"):
+        text = text[:builder.end()] + "\n" + release_strip + text[builder.end():]
+    mounted = mount_wheels(text)
+    if mounted == text:
+        print("::warning::Wheel install layout changed; keeping upstream's wheel handling")
     with open(path, "w") as f:
-        f.write(text)
+        f.write(mounted)
     print(f"Dockerfile: {count} cache mounts dropped")
     return 0
 

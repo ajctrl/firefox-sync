@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Unit tests of .github/scripts/syncstorage-rs-build.py: the cache mounts it drops from
-upstream's Dockerfile, on fixtures, no network.
+"""Unit tests of the Sync image build changes on Dockerfile fixtures, no network.
 
 Usage: python3 tests/test_syncstorage_rs_build.py [-v]
 """
 
 import importlib.util
 import os
+from pathlib import Path
+import tempfile
 import unittest
+from unittest.mock import patch
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 spec = importlib.util.spec_from_file_location("syncstorage_rs_build", os.path.join(ROOT, ".github", "scripts", "syncstorage-rs-build.py"))
@@ -49,6 +51,40 @@ RUN cargo install --path ./syncserver --locked --root /app
         self.assertEqual(build.drop_cache_mounts(line), (line, 0))
         self.assertEqual(build.drop_cache_mounts("RUN --mount=type=cache,target=/c --mount=type=secret,id=t make\n"),
                          ("RUN --mount=type=secret,id=t make\n", 1))
+
+
+class WheelMount(unittest.TestCase):
+    copy = "COPY --from=builder /app/wheels /tmp/wheels\n"
+    pip = ("pip3 install --no-index --find-links=/tmp/wheels -r /app/requirements.txt && \\\n"
+           "    if [ -s extra.txt ]; then pip3 install --find-links=/tmp/wheels -r extra.txt; fi && \\\n")
+    install = "RUN " + pip + "    rm -rf /tmp/wheels /root/.cache/pip\n"
+
+    def test_only_the_install_mounts_the_wheels(self):
+        setup = "RUN groupadd app\n"
+        self.assertEqual(build.mount_wheels(self.copy + setup + self.install),
+                         setup + "RUN --mount=type=bind,from=builder,source=/app/wheels,target=/tmp/wheels "
+                         + self.pip + "    rm -rf /root/.cache/pip\n")
+
+    def test_changed_consumers_keep_upstream_copy(self):
+        for dockerfile in (self.copy, self.install, self.copy + self.install + "RUN ls /tmp/wheels\n",
+                           self.copy + self.install.replace("rm -rf", "ls")):
+            with self.subTest(dockerfile=dockerfile):
+                self.assertEqual(build.mount_wheels(dockerfile), dockerfile)
+
+    def test_prepare_applies_runtime_changes_even_without_cargo_cache_mounts(self):
+        with tempfile.TemporaryDirectory() as checkout:
+            path = Path(checkout) / "Dockerfile"
+            path.write_text("FROM chef AS builder\nRUN cargo install\nFROM debian\n" + self.copy + self.install)
+            env = {"SERVICE_TAG": "0.24.0", "SERVICE_REPOSITORY_NAME": "mozilla-services/syncstorage-rs",
+                   "BUILD_URL": "local"}
+            with patch.dict(os.environ, env), patch.object(build.subprocess, "run") as git:
+                git.return_value.stdout = "test-commit\n"
+                self.assertEqual(build.main([checkout]), 0)
+            builder, runtime = path.read_text().split("FROM debian\n")
+            self.assertIn("ENV CARGO_PROFILE_RELEASE_STRIP=debuginfo\n", builder)
+            self.assertNotIn("CARGO_PROFILE", runtime)
+            self.assertNotIn(self.copy, runtime)
+            self.assertIn("from=builder,source=/app/wheels,target=/tmp/wheels", runtime)
 
 
 if __name__ == "__main__":
