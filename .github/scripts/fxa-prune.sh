@@ -32,4 +32,38 @@ for output in apps/payments/next/build dist/apps/payments/api node_modules/@next
     fi
 done
 
+# l10n:prime has recorded the translation revision in git-head.txt.
+l10n_git=external/l10n/.git
+if [ -d "$l10n_git" ] && [ -f "$l10n_git/HEAD" ] &&
+   [ "$(realpath "$l10n_git")" = "/fxa/$l10n_git" ]; then
+    du -sk -- "$l10n_git"
+    rm -rf -- "$l10n_git"
+fi
+
 rm -rf -- .nx .venv
+
+# The settings webpack config uses this directory for webpack, Babel, ESLint
+# and TypeScript. The admin panel also enables babel-loader's disk cache.
+for cache in packages/fxa-settings/node_modules/.cache \
+             packages/fxa-admin-panel/node_modules/.cache/babel-loader \
+             node_modules/.cache/babel-loader; do
+    if [ -d "$cache" ] && [ "$(realpath "$cache")" = "/fxa/$cache" ]; then
+        du -sk -- "$cache"
+        rm -rf -- "$cache"
+    fi
+done
+
+# Yarn's install-state.gz is an optimization used by subsequent Yarn commands.
+cache=.yarn/install-state.gz
+if [ -f "$cache" ] && [ "$(realpath "$cache")" = "/fxa/$cache" ]; then
+    du -k -- "$cache"
+    rm -f -- "$cache"
+fi
+
+# TypeScript and ESLint also write metadata beside project sources and outputs.
+for tree in apps libs packages dist; do
+    [ -d "$tree" ] || continue
+    find "$tree" -name node_modules -prune -o \
+        -type f \( -name '*.tsbuildinfo' -o -name .eslintcache \) \
+        -printf '%k\t%p\n' -exec rm -f -- {} +
+done
