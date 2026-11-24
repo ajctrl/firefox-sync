@@ -36,6 +36,7 @@ on:
       - upstream-patches/**
       - .github/scripts/upstream-patches.py
       - .github/scripts/fxa-prune.sh
+      - .github/scripts/fxa-settings-sourcemap.patch
 
 concurrency:
   # per branch: a branch run never cancels or waits for main's. A newer push to a branch cancels
@@ -106,7 +107,7 @@ jobs:
         env:
           REBUILD: ${{ inputs.rebuild }}
           PATCHES: ${{ steps.patches.outputs.label }}
-          PRUNE_RECIPE: ${{ hashFiles('.github/scripts/fxa-prune.sh') }}
+          PRUNE_RECIPE: ${{ hashFiles('.github/scripts/fxa-prune.sh', '.github/scripts/fxa-settings-sourcemap.patch') }}
         run: |
           echo "prune_recipe=${PRUNE_RECIPE}" >> "${GITHUB_OUTPUT}"
           image="${{ env.REPOSITORY_REGISTRY }}/${{ env.REPOSITORY_FULL_NAME }}:fxa-mono-${{ steps.version.outputs.version }}"
@@ -288,6 +289,7 @@ jobs:
             upstream-patches/
             .github/scripts/upstream-patches.py
             .github/scripts/fxa-prune.sh
+            .github/scripts/fxa-settings-sourcemap.patch
           sparse-checkout-cone-mode: false
 
       - name: Apply the upstream patches
@@ -296,6 +298,12 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           python3 ffs/.github/scripts/upstream-patches.py apply fxa-mono "${{ needs.prepare.outputs.version }}" .
+          patch=ffs/.github/scripts/fxa-settings-sourcemap.patch
+          if git apply --check "$patch"; then
+            git apply "$patch"
+          else
+            echo "::warning::FxA settings build changed; using upstream's source map configuration"
+          fi
           # After upstream's build and production install, before its final Docker stage.
           test -f _dev/docker/mono/build.sh
           { echo; cat ffs/.github/scripts/fxa-prune.sh; } >> _dev/docker/mono/build.sh
