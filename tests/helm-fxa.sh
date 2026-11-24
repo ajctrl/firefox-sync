@@ -343,7 +343,7 @@ fxa_ingress_lint() {
   # password and the move to 9, on lts the patch it needs; nothing with your own server
   grep -q "^Their database runs docker.io/library/mysql:lts: a helm upgrade that would move it to another major is refused$" <<< "${out}" \
     && grep -q "^unless fxa.database.allowMajorUpgrade=true" <<< "${out}" \
-    && grep -q "MySQL lts needs an accounts image with mozilla/fxa#21709 (ours);$" <<< "${out}" || fail "NOTES: the accounts database on mysql:lts: ${out}"
+    && grep -q "MySQL lts needs an accounts image with mozilla/fxa#21709 (v1.350.0 on, or ours);$" <<< "${out}" || fail "NOTES: the accounts database on mysql:lts: ${out}"
   grep -q "On MySQL 8 with mysql_native_password, for" <<< "$(notes -f "${fxa}" --set fxa.database.image.mysql=docker.io/library/mysql:8)" \
     || fail "NOTES: the accounts database on mysql:8 without its native password note"
   out=$(notes -f "${fxa}" --set fxa.database.backend=mariadb)
@@ -1043,7 +1043,15 @@ fxa_e2e() {
   platform=$(docker version -f 'linux/{{.Server.Arch}}')
   pull_import() {
     local s=${SECONDS}
-    docker image inspect "$1" > /dev/null 2>&1 || docker pull -q "$1" > /dev/null || fail "$1 not pulled"
+    # (a pull is tried three times: the registry's blob storage can drop a request, "failed to
+    # copy: httpReadSeeker: failed open", and docker pull does not retry it)
+    local try
+    for try in 1 2 3; do
+      docker image inspect "$1" > /dev/null 2>&1 || docker pull -q "$1" > /dev/null && break
+      [[ ${try} == 3 ]] && fail "$1 not pulled"
+      echo "  $1: pull failed (try ${try} of 3), again in $((try * 15)) s"
+      sleep $((try * 15))
+    done
     echo "  $1 pulled: $((SECONDS - s)) s"
     bg_marker go
     s=${SECONDS}

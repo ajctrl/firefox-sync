@@ -227,9 +227,19 @@ TMPDIR=${WORK}/tmp
 
 echo "== setup/images.sh: accounts images with a fix of upstream-patches.yml (fxa_has_fix, config/fxa/fixed-in)"
 has() { fxa_has_fix "$@"; echo $?; }
-check "$(fxa_fixed_in mozilla/fxa#21709)|$(fxa_fixed_in mozilla/fxa#21494)" "|" "config/fxa/fixed-in: no release has them yet"
+check "$(fxa_fixed_in mozilla/fxa#21709)|$(fxa_fixed_in mozilla/fxa#21494)" "v1.350.0|" "config/fxa/fixed-in: mozilla/fxa#21709 released in v1.350.0, mozilla/fxa#21494 not yet"
+# this checkout's: every image of v1.350.0 or later has mozilla/fxa#21709, Mozilla's (no label) and ours
+# (their label without it), the older ones by their label only
+check "$(has mozilla/fxa#21709 "" v1.350.0 v1.350.0) $(has mozilla/fxa#21709 "" "" v1.350.0) $(has mozilla/fxa#21709 'mozilla/fxa#21494@3e2cb67..0eaa3a2 mozilla/fxa#21731@ccca044..f98a8e5' v1.350.0 fxa-mono-latest) $(has mozilla/fxa#21709 none "" fxa-mono-v1.351.2)" \
+  "0 0 0 0" "this checkout: images of v1.350.0 or later have mozilla/fxa#21709, Mozilla's and ours"
+check "$(has mozilla/fxa#21709 "" v1.349.2 v1.349.2) $(has mozilla/fxa#21709 'mozilla/fxa#21494@3e2cb67..0eaa3a2 mozilla/fxa#21709@86aa1fa..d494219' v1.349.2 fxa-mono-v1.349.2) $(has mozilla/fxa#21709 'mozilla/fxa#21554@3e2cb67..bb2b77b+v1.349.0' v1.349.0 fxa-mono-v1.349.0) $(has mozilla/fxa#21494 "" v1.350.0 v1.350.0)" \
+  "1 0 0 1" "this checkout: Mozilla's v1.349.2 has not, ours before v1.350.0 by their label (mozilla/fxa#21554 too); mozilla/fxa#21494 by the label still"
 LABEL='mozilla/fxa#21494@3e2cb67..0eaa3a2 mozilla/fxa#21709@86aa1fa..d494219 mozilla/fxa#21731@ccca044..f98a8e5'
-# not released: the label only
+# not released (a fixed-in of a test checkout without them): the label only
+SELF_DIR=${WORK}/unreleased
+mkdir -p "${SELF_DIR}/config/fxa"
+grep '^#' "${CODE}/config/fxa/fixed-in" > "${SELF_DIR}/config/fxa/fixed-in"
+check "$(fxa_fixed_in mozilla/fxa#21709)|$(fxa_fixed_in mozilla/fxa#21494)" "|" "fixed-in without them: no release"
 check "$(has mozilla/fxa#21709 "${LABEL}" v1.347.3 fxa-mono-latest) $(has mozilla/fxa#21494 "${LABEL}" "" fxa-mono-latest)" "0 0" "not released: an image with the patch in its label has it"
 check "$(has mozilla/fxa#21709 none v1.400.0 fxa-mono-latest) $(has mozilla/fxa#21709 "" "" v1.400.0) $(has mozilla/fxa#21494 "mozilla/fxa#21709@a..b" "" fxa-mono-v1.400.0)" "1 1 1" \
   "not released: without it in the label, none has it, whatever its release"
@@ -240,7 +250,7 @@ check "$(has mozilla/fxa#21709 "${OLD_LABEL}" v1.349.0 fxa-mono-latest) $(has mo
 # released in v1.352.0 (a fixed-in of a test checkout)
 SELF_DIR=${WORK}/checkout
 mkdir -p "${SELF_DIR}/config/fxa"
-cp "${CODE}/config/fxa/fixed-in" "${SELF_DIR}/config/fxa/fixed-in"
+grep '^#' "${CODE}/config/fxa/fixed-in" > "${SELF_DIR}/config/fxa/fixed-in"
 printf 'mozilla/fxa#21709 v1.352.0\n' >> "${SELF_DIR}/config/fxa/fixed-in"
 check "$(fxa_fixed_in mozilla/fxa#21709)|$(fxa_fixed_in mozilla/fxa#21494)" "v1.352.0|" "fixed-in: the release of a pull request, the others none"
 check "$(has mozilla/fxa#21709 none v1.352.0 fxa-mono-latest) $(has mozilla/fxa#21709 "" v1.360.2 latest) $(has mozilla/fxa#21709 "" "" v1.352.1) $(has mozilla/fxa#21709 "" "" fxa-mono-v1.400.0) $(has mozilla/fxa#21709 "" 1.352.0 "")" \
@@ -494,6 +504,21 @@ check "$(upv ADMIN_DB_PASSWORD | grep -cE '^[A-Za-z0-9]{32}$') $(upv SYNC_POSTGR
   || cat "${WORK}/upgrade.log"
 (unset COMPOSE_PROJECT_NAME; compose_on_podman() { return 1; }; no_listeners; FFS_ENTRY_DIR=${WORK}/up QUADLET_DIR=${WORK}/no-units upgrade_env) < /dev/null > "${WORK}/upgrade-again.log" 2>&1
 check "$? $(ls "${WORK}/up"/.env.before-upgrade-* | wc -l | tr -d ' ') $(grep -c '^Updated ' "${WORK}/upgrade-again.log")" "0 1 0" "upgrade_env run again: nothing changes"
+# your own PostgreSQL server (SYNC_DB_CONTAINERS=0): SYNC_POSTGRES_IMAGE is only the client there,
+# not pinned; a pin of before is kept, and said
+for own_pin in "" postgres:18; do
+  rm -rf "${WORK}/up-own" && mkdir -p "${WORK}/up-own" && cp -r "${CODE}/.env-example" "${CODE}/db" "${WORK}/up-own/"
+  sed -e 's|<REPLACE_WITH_SOMETHING_SECURE>|s3cret|' -e 's|<REPLACE_WITH_YOUR_DOMAIN>|sync.example.org|' -e 's|^ADMIN_DB_PASSWORD=.*|ADMIN_DB_PASSWORD=|' \
+    -e 's|^FXA_MYSQL_PASSWORD=.*|FXA_MYSQL_PASSWORD=<REPLACE_WITH_SOMETHING_SECURE>|' -e 's|^SYNC_IMAGE=.*|SYNC_IMAGE=syncstorage-rs-postgres|' \
+    -e 's|^SYNC_DB_CONTAINERS=.*|SYNC_DB_CONTAINERS=0|' -e 's|^SYNC_POSTGRES_HOST=.*|SYNC_POSTGRES_HOST=pg.example.org|' \
+    -e "s|^# SYNC_POSTGRES_IMAGE=.*|$([ -n "${own_pin}" ] && echo "SYNC_POSTGRES_IMAGE=${own_pin}" || echo '# SYNC_POSTGRES_IMAGE=postgres:latest')|" \
+    "${CODE}/.env-example" > "${WORK}/up-own/.env"
+  (unset COMPOSE_PROJECT_NAME; compose_on_podman() { return 1; }; no_listeners; FFS_ENTRY_DIR=${WORK}/up-own QUADLET_DIR=${WORK}/no-units upgrade_env) < /dev/null > "${WORK}/upgrade-own.log" 2>&1
+  own_rc=$?
+  check "${own_rc} $(ENV_READ=${WORK}/up-own/.env SCRIPT_DIR=${WORK}/up-own env_plain SYNC_POSTGRES_IMAGE)| $(grep -c "^NOTE: SYNC_POSTGRES_IMAGE=${own_pin:-x}: with your own PostgreSQL server it is only the client" "${WORK}/upgrade-own.log")" \
+    "0 ${own_pin}| $([ -n "${own_pin}" ] && echo 1 || echo 0)" "upgrade_env, your own PostgreSQL server: SYNC_POSTGRES_IMAGE ${own_pin:-not pinned}$([ -n "${own_pin}" ] && echo ': kept, with a note')" \
+    || cat "${WORK}/upgrade-own.log"
+done
 
 [ "${FAILED}" = 0 ] && echo "RESULT: PASS" || echo "RESULT: FAIL"
 exit "${FAILED}"

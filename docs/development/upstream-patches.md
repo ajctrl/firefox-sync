@@ -45,7 +45,7 @@ Upstream pull requests target upstream `main`, which runs ahead of the releases:
 
 When Mozilla merges its own version of a change we carry (a pull request of theirs, not ours), the entry can point at theirs until a release has it: their pull request, `head_repo` their repository (a branch of mozilla/fxa is `mozilla/fxa`), `sha` its head and `base` the parent of its first commit. Merged and not in the release built, it is applied as an open one is; once a release has it, the run flags the entry for removal. Close ours as superseded.
 
-Entries are applied in the order of the file. A pull request made on top of another one (its `base` has the other's changes) comes after it. mozilla/fxa#21709 (the mysql2 driver, Mozilla's version of our mozilla/fxa#21554) is applied before mozilla/fxa#21731, which fixes the patcher with that driver.
+Entries are applied in the order of the file. A pull request made on top of another one (its `base` has the other's changes) comes after it. mozilla/fxa#21709 (the mysql2 driver, Mozilla's version of our mozilla/fxa#21554) was applied before mozilla/fxa#21731, which fixes the patcher with that driver, until v1.350.0 released it.
 
 ## Release pins
 
@@ -90,11 +90,11 @@ In one commit: the entry (its release pins with it), what its `when_released` sa
 
 A release pin, or a port, that no release built here needs any more (the entry's `base...sha` applies to the release built) can go on its own.
 
-An accounts pull request that `prepare_environment.sh` and the tests look for in the label (mozilla/fxa#21494, mozilla/fxa#21709) also gets a line in [config/fxa/fixed-in](/config/fxa/fixed-in): the pull request and the first release with it. Without it, the images built after the removal, which no longer list it, would count as images without it.
+An accounts pull request that `prepare_environment.sh` and the tests look for in the label (mozilla/fxa#21494, mozilla/fxa#21709) also gets a line in [config/fxa/fixed-in](/config/fxa/fixed-in): the pull request and the first release with it (`mozilla/fxa#21709 v1.350.0`). Without it, the images built after the removal, which no longer list it, would count as images without it.
 
 ## In the tests
 
-Tests that work around an upstream bug read the label. The accounts' tests ([tests/e2e-fxa.sh](/tests/e2e-fxa.sh), [tests/podman.sh](/tests/podman.sh), [tests/helm-fxa.sh](/tests/helm-fxa.sh), [tests/fxa-upgrade.sh](/tests/fxa-upgrade.sh)) decide with [tests/fxa_fix.sh](/tests/fxa_fix.sh), as `prepare_environment.sh` does: the label, or [config/fxa/fixed-in](/config/fxa/fixed-in). [tests/prepare_functions.sh](/tests/prepare_functions.sh) checks both. `tests/e2e.sh` skips upstream's `test_node_assignment.py::test_user_creation` on MariaDB only for images without [mozilla-services/syncstorage-rs#2638](https://github.com/mozilla-services/syncstorage-rs/pull/2638).
+Tests that work around an upstream bug read the label. The accounts' tests ([tests/e2e-fxa.sh](/tests/e2e-fxa.sh), [tests/podman.sh](/tests/podman.sh), [tests/helm-fxa.sh](/tests/helm-fxa.sh), [tests/fxa-upgrade.sh](/tests/fxa-upgrade.sh)) decide with [tests/fxa_fix.sh](/tests/fxa_fix.sh), as `prepare_environment.sh` does: the label, or [config/fxa/fixed-in](/config/fxa/fixed-in). [tests/prepare_functions.sh](/tests/prepare_functions.sh) checks both.
 
 ## Run it locally
 

@@ -629,6 +629,10 @@ if [ "${BACKEND}" = mysql ] && [ "${SYNC_DB}" = mariadb ] && [ -z "${EXTDB}" ]; 
   check "$(grep '^SYNC_MARIADB_IMAGE=' "${UP}/.env") $(grep -c "the Sync databases stay on MariaDB ${mariadb_major}, the major of their data" "${WORK}/upgrade.log")" \
     "SYNC_MARIADB_IMAGE=mariadb:${mariadb_major} 1" "--upgrade pins the Sync MariaDB of an install from before to the major of its data (${mariadb_major})"
 fi
+# your own PostgreSQL server: no data of the stack's, the image only its client (the backups'
+# pg_dump, which refuses a newer server): --upgrade pins nothing there
+[ "${BACKEND}" = postgres ] && [ -n "${EXTDB}" ] && check "$(grep -c '^SYNC_POSTGRES_IMAGE=' "${UP}/.env")" 0 \
+  "--upgrade with your own PostgreSQL server: SYNC_POSTGRES_IMAGE not pinned (postgres:latest, the client)"
 [ "${SYNC_DB}" = mysql ] && [ -n "${MYSQL_PINNED}" ] && check "$(grep '^SYNC_MYSQL_IMAGE=' "${UP}/.env") $(grep -c 'the Sync databases stay on MySQL 8' "${WORK}/upgrade.log")" \
   "SYNC_MYSQL_IMAGE=mysql:8 1" "--upgrade pins the Sync databases of an install from before on MySQL 8"
 # each value under its new name, as it was under the old one (the empty ones it may fill in)
@@ -1323,7 +1327,7 @@ else
       "${BACKUP_IMAGE}" sh /ffs-backup/backup.sh now >> "${WORK}/backup-extdb.log" 2>&1
   }
   backup_extdb
-  check "$?" 0 "a backup run with EXTERNAL_DB (as database client)"
+  check "$?" 0 "a backup run with EXTERNAL_DB (as database client, ${BACKUP_IMAGE})" || tail -5 "${WORK}/backup-extdb.log"
   # check the dumps exist and pass gzip -t
   if [ "${BACKEND}" = mysql ]; then
     expected="${ADMIN_DB_NAME}.sql.gz ${SYNC_STORAGE_DB_NAME}.sql.gz ${SYNC_TOKENSERVER_DB_NAME}.sql.gz"
@@ -1587,13 +1591,23 @@ if in_app "test -f ${DELETE_KEY} && test -f tools/integration_tests/tokenserver/
   in_app "python3 -c 'import json, sys; k = json.load(open(\"tools/fxa_delete/testing/delete_test_jwk.json\")); print(k[\"n\"], k[\"e\"])'" > "${WORK}/delete-jwk" 2> /dev/null
   read -r DELETE_N DELETE_E < "${WORK}/delete-jwk"
   check "$([ -n "${DELETE_N:-}" ] && [ -n "${DELETE_E:-}" ] && echo read)" read "the public half of upstream's delete test key, from the image"
+  # 0.25.1 (mozilla-services/syncstorage-rs#2766, #2768) renamed the settings: the issuer is
+  # FXA_ADMIN_ISSUER, the audience FXA_ADMIN_AUDIENCE with a default (urn:mozilla:fxa:tokenserver);
+  # 0.25.0 had FXA_DELETE_DATA_AUDIENCE and _ISSUER. Those the image's own tests read
+  if in_app "grep -q SYNC_TOKENSERVER__FXA_ADMIN_ISSUER tools/integration_tests/tokenserver/helpers.py" > /dev/null 2>&1; then
+    DELETE_SETTINGS="SYNC_TOKENSERVER__FXA_ADMIN_ISSUER: \"${DELETE_ISS}\""
+    DELETE_RUNNER="SYNC_TOKENSERVER__FXA_ADMIN_ISSUER=${DELETE_ISS}"
+  else
+    DELETE_SETTINGS="SYNC_TOKENSERVER__FXA_DELETE_DATA_AUDIENCE: \"${DELETE_AUD}\"
+      SYNC_TOKENSERVER__FXA_DELETE_DATA_ISSUER: \"${DELETE_ISS}\""
+    DELETE_RUNNER="SYNC_TOKENSERVER__FXA_DELETE_DATA_AUDIENCE=${DELETE_AUD} SYNC_TOKENSERVER__FXA_DELETE_DATA_ISSUER=${DELETE_ISS}"
+  fi
   cat > "${WORK}/delete-data.yml" << EOF
 services:
   syncstorage:
     environment:
       SYNC_TOKENSERVER__FXA_DELETE_DATA_ENABLED: "true"
-      SYNC_TOKENSERVER__FXA_DELETE_DATA_AUDIENCE: "${DELETE_AUD}"
-      SYNC_TOKENSERVER__FXA_DELETE_DATA_ISSUER: "${DELETE_ISS}"
+      ${DELETE_SETTINGS}
       SYNC_TOKENSERVER__FXA_OAUTH_SECONDARY_JWK__KTY: RSA
       SYNC_TOKENSERVER__FXA_OAUTH_SECONDARY_JWK__ALG: RS256
       SYNC_TOKENSERVER__FXA_OAUTH_SECONDARY_JWK__KID: syncstorage-rs-delete-test
@@ -1603,7 +1617,7 @@ services:
 EOF
   COMPOSE_EXTRA+=("${WORK}/delete-data.yml")
   # what the tests sign with, in their runner (helpers.py's defaults, said explicitly)
-  DELETE_ENV="FXA_DELETE_SIGNING_KEY_PEM=/app/${DELETE_KEY} SYNC_TOKENSERVER__FXA_DELETE_DATA_AUDIENCE=${DELETE_AUD} SYNC_TOKENSERVER__FXA_DELETE_DATA_ISSUER=${DELETE_ISS} "
+  DELETE_ENV="FXA_DELETE_SIGNING_KEY_PEM=/app/${DELETE_KEY} ${DELETE_RUNNER} "
   echo "  the image has upstream's delete endpoint tests: the endpoint on, with its test key"
 fi
 set_env SYNC_MAX_USERS 1000000
@@ -1612,15 +1626,6 @@ check "$(wait_init)" 0 "init container exit code (SYNC_MAX_USERS=1000000)"
 hb > /dev/null
 # test_e2e.py needs real accounts on Mozilla's FxA stage environment
 UPSTREAM_TS="tools/integration_tests/tokenserver --ignore=tools/integration_tests/tokenserver/test_e2e.py"
-if [ "${BACKEND}" = mysql ] && [ "${DATABASE_SERVER}" != MySQL ] && [[ " ${UPSTREAM_PATCHES} " != *" mozilla-services/syncstorage-rs#2638@"* ]]; then
-  # with several empty nodes the tokenserver orders them by LOG(0) (NULL), MySQL 8
-  # (upstream CI, EXTERNAL_DB=1 and SYNC_DB=mysql here, where it runs) returns them in id
-  # order, MariaDB does not: this stack has one node. Fixed by mozilla-services/syncstorage-rs#2638,
-  # in our images since upstream-patches.yml: deselected only for the images without it
-  # (node ids are relative to tools/integration_tests, pytest's rootdir in the image)
-  T=test_node_assignment.py::test_user_creation
-  UPSTREAM_TS="${UPSTREAM_TS} --deselect tokenserver/${T} --deselect tools/integration_tests/tokenserver/${T}"
-fi
 in_app "${DELETE_ENV}$(pytest_sh "${UPSTREAM_TS}$(racy_deselect tokenserver/)")"
 check "$?" 0 "upstream tokenserver tests"
 if [ -n "${DELETE_ENV}" ]; then

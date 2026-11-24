@@ -36,7 +36,7 @@ A new Mozilla release comes about every two weeks. It is published here only aft
 With docker compose:
 
 1. Make a backup of the accounts. With the backup service: `docker compose exec backup-fxa sh /ffs-backup/backup.sh now`. Without it, back up the `fxa-db` volume (`fxa-db-mariadb` with MariaDB) and the `fxa-keys` volume. With your own database server, back up its `fxa`, `fxa_oauth`, `fxa_profile`, `pushbox` and `ffs` databases.
-1. To decide when to upgrade, pin a release in `.env`, for example `FXA_VERSION=fxa-mono-v1.349.0`, and change it to upgrade.
+1. To decide when to upgrade, pin a release in `.env`, for example `FXA_VERSION=fxa-mono-v1.350.0`, and change it to upgrade.
 1. Pull and start, pinned or not:
 
     ```bash
@@ -55,7 +55,7 @@ With docker compose:
 With the Helm chart:
 
 1. Make a backup: `kubectl create job --from=cronjob/ffs-firefox-sync-backup backup-now-$(date +%s)` dumps the accounts first. The keys stay on their PVC or in `fxa.keys.existingSecret`, untouched.
-1. Pin a release in your values, for example `fxa.image.tag: fxa-mono-v1.349.0`, and change it to upgrade. With `fxa-mono-latest` and `image.pullPolicy: IfNotPresent`, a node that has the image never pulls a newer one.
+1. Pin a release in your values, for example `fxa.image.tag: fxa-mono-v1.350.0`, and change it to upgrade. With `fxa-mono-latest` and `image.pullPolicy: IfNotPresent`, a node that has the image never pulls a newer one.
 1. `helm upgrade` as in [Helm](#helm). The auth pod stops, and its new pod runs the migrations, then the sign-up policy, in its init containers before it serves. The content and profile servers wait for it.
 1. Check `kubectl logs deploy/ffs-firefox-sync-fxa-auth -c migrations`, and the admin UI's overview as above. A failed migration keeps the auth pod in `Init:Error` and out of its Service. To go back to the older release, restore the backup ([Restore on Kubernetes](backups.md#restore-on-kubernetes)).
 
@@ -109,7 +109,7 @@ The self-hosted accounts:
 
     ```bash
     ./prepare_environment.sh --render-units
-    podman pull ghcr.io/porelli/firefox-sync:fxa-mono-v1.349.0
+    podman pull ghcr.io/porelli/firefox-sync:fxa-mono-v1.350.0
     ```
 
 1. Run the migrations again. Restarting their unit restarts, in order, the units that require it: the sign-up policy, then the auth server, the accounts pages, the profile server and the admin UI. The profile worker and its static server do not require it, so restart them too:
@@ -210,7 +210,7 @@ The earlier release had no setting for it: with `MARIADB_*_SERVER` (or `POSTGRES
 
 ### The database majors of an install from before
 
-The earlier release ran `mariadb:lts`, which upgraded the data of the Sync databases whenever a pull brought a new major, and `postgres:18`. The database images now follow each database's long-term tag, but refuse data of another major. `./prepare_environment.sh --upgrade` (compose and Quadlets) writes the pins that keep the install where it is, and says so: `SYNC_MARIADB_IMAGE` with the major the data holds (for example `mariadb:12`, read from the volume or the running server), `SYNC_POSTGRES_IMAGE=postgres:18`. The pins are in [Database majors](#database-majors).
+The earlier release ran `mariadb:lts`, which upgraded the data of the Sync databases whenever a pull brought a new major, and `postgres:18`. The database images now follow each database's long-term tag, but refuse data of another major. `./prepare_environment.sh --upgrade` (compose and Quadlets) writes the pins that keep the install where it is, and says so: `SYNC_MARIADB_IMAGE` with the major the data holds (for example `mariadb:12`, read from the volume or the running server), `SYNC_POSTGRES_IMAGE=postgres:18` with the stack's PostgreSQL container (with your own server and `SYNC_DB_CONTAINERS=0`, none: there it is only the client). The pins are in [Database majors](#database-majors).
 
 **If you update the files without it**, the MariaDB containers do not start rather than upgrade the data on a new major: `docker compose logs` shows [db/mysql/keep-major.sh](/db/mysql/keep-major.sh)'s `this database is MariaDB 11, the image is MariaDB 12`. Run `--upgrade` then.
 
@@ -332,24 +332,25 @@ Each database image moves to a new major in its own way. Which majors are suppor
 |---|---|---|---|---|---|
 | Sync on MariaDB: `syncstorage_db`, `tokenserver_db`, `backup` | `SYNC_MARIADB_IMAGE` (`database.image.mariadb`) | `mariadb:lts` | `mariadb:lts` | the major of the data, for example `mariadb:12` | not set: the containers refuse to start on data of another major; set: the data is upgraded at the first start (`MARIADB_AUTO_UPGRADE`) |
 | Sync on MySQL (`SYNC_DB=mysql`): the same three | `SYNC_MYSQL_IMAGE` (`database.image.mysql`) | `mysql:lts` | `mysql:lts` | `mysql:8` | not set: the container refuses to start on data of another major; set: the data is upgraded at the first start |
-| Sync on PostgreSQL: `postgres_db`, `backup` | `SYNC_POSTGRES_IMAGE` (`database.image.postgres`) | `postgres:latest` | the major `postgres:latest` is at, for example `postgres:18` | `postgres:18` | the container stops on another major's data, whatever the setting says, and says what to pin |
-| accounts on MySQL (`FXA_DB=mysql`): `fxa-db`, `backup-fxa` | `FXA_MYSQL_IMAGE` (`fxa.database.image.mysql`), `FXA_MYSQL_ARGS` (the chart: from the image) | `mysql:lts` | `mysql:lts` with our accounts images; `mysql:8` and `FXA_MYSQL_ARGS` with others | `mysql:8` and `FXA_MYSQL_ARGS` | not set: `fxa-db` refuses to start on data of another major; set: the data is upgraded at the first start |
+| Sync on PostgreSQL: `postgres_db`, `backup` | `SYNC_POSTGRES_IMAGE` (`database.image.postgres`) | `postgres:latest` | the major `postgres:latest` is at, `postgres:19` today; your own server: none | `postgres:18`; your own server: none | the container stops on another major's data, whatever the setting says, and says what to pin |
+| accounts on MySQL (`FXA_DB=mysql`): `fxa-db`, `backup-fxa` | `FXA_MYSQL_IMAGE` (`fxa.database.image.mysql`), `FXA_MYSQL_ARGS` (the chart: from the image) | `mysql:lts` | `mysql:lts` with accounts images of v1.350.0 and later, Mozilla's too, or ours with mozilla/fxa#21709; `mysql:8` and `FXA_MYSQL_ARGS` with older ones | `mysql:8` and `FXA_MYSQL_ARGS` | not set: `fxa-db` refuses to start on data of another major; set: the data is upgraded at the first start |
 | accounts on MariaDB (`FXA_DB=mariadb`): `fxa-db`, `backup-fxa` | `FXA_MARIADB_IMAGE` (`fxa.database.image.mariadb`) | `mariadb:lts` | `mariadb:lts` | `mariadb:11` | not set: `fxa-db` refuses to start on data of another major; set: the data is upgraded at the first start (`MARIADB_AUTO_UPGRADE`) |
 | the accounts' cache: `fxa-redis` | none (`fxa.redis.image`) | `redis:alpine` | nothing | nothing | no data to upgrade |
 
 - The setting is also the image of the backups of that database, so the dump's client matches the server.
 - "Installs from before" are those set up by a release that did not write these settings. `./prepare_environment.sh --upgrade` on one (compose and Quadlets), the setup run again, or a new setup that finds its database volumes, writes the same pins.
-- `prepare_environment.sh` reads the label of the accounts image to choose between `mysql:lts` and `mysql:8` ([Upstream patches](reference/images.md#upstream-patches)). When it cannot read the label, it writes `mysql:8` and says so. It reads the local image when there is one, so pull a newer accounts image before running it.
+- `prepare_environment.sh` reads the labels of the accounts image to choose between `mysql:lts` and `mysql:8`: its patches, and its release, else its tag ([Upstream patches](reference/images.md#upstream-patches)). When it can read neither, it writes `mysql:8` and says so. It reads the local image when there is one, so pull a newer accounts image before running it.
 - A new setup over the PostgreSQL volume of an earlier install is pinned to the major in its `PG_VERSION`. One where the major of `postgres:latest` cannot be read (no runtime, no registry) stops with an error.
 - With Quadlets, `prepare_environment.sh` writes the same images into the units when it installs them. It reads the major of `postgres:latest` with Podman, the image store the units run from.
 - `lts` moves to the next long-term major when MariaDB or MySQL releases it. The next pull brings it (`docker compose pull`, or the Quadlets' `AutoUpdate=registry` on its own), and the server upgrades the data at its next start, with no way back but a backup. To choose when the data moves, pin a major: `mariadb:12`, `mysql:9`, `postgres:18` (Helm: fully qualified, `docker.io/library/mysql:9`).
 - The refusal on another MariaDB or MySQL major comes from [db/mysql/keep-major.sh](/db/mysql/keep-major.sh), only while the setting is not set: `keep-major.sh: this database is MySQL 8, the image is MySQL 9`. Set the setting to the major the data has, or move it as in [MariaDB](#mariadb) or [MySQL 8 to 9](#mysql-8-to-9). PostgreSQL's comes from [db/postgres/keep-major.sh](/db/postgres/keep-major.sh) (the chart: its `db-major` init container), whatever the setting says.
-- `FXA_MYSQL_ARGS` is `--mysql-native-password=ON --authentication-policy=mysql_native_password` for accounts images without [mozilla/fxa#21709](https://github.com/mozilla/fxa/pull/21709) (Mozilla's, and ours from before). MySQL 9 refuses those options. Which images have it: [MySQL or MariaDB](accounts.md#mysql-or-mariadb).
-- With your own database server, the setting is only the backups' client: see [PostgreSQL](databases.md#postgresql).
+- With your own database server, the setting is only the client (PostgreSQL: of `db-bootstrap` and the backups), and `prepare_environment.sh` writes no PostgreSQL pin there: see [PostgreSQL](databases.md#postgresql).
+- The init containers of PostgreSQL (`sync_role_init`, `tokenserver_db_init`, the chart's `sync-role` and `db-init`) are built on `postgres:latest`, so their `psql` is of the newest major. It works with a server of any supported major, the one an install is pinned to included.
+- `FXA_MYSQL_ARGS` is `--mysql-native-password=ON --authentication-policy=mysql_native_password` for accounts images without [mozilla/fxa#21709](https://github.com/mozilla/fxa/pull/21709) (Mozilla's before v1.350.0, and ours from before the patch). MySQL 9 refuses those options. Which images have it: [MySQL or MariaDB](accounts.md#mysql-or-mariadb).
 - A chart cannot read the image's major at install, as `prepare_environment.sh` does: pin `database.image.postgres` in your values (`kubectl exec sts/ffs-firefox-sync-postgres -- postgres --version` shows the major the release runs). The install's NOTES say so too.
 - `helm upgrade` refuses a `database.image.<backend>` that would move the bundled database to another major (two numbered majors, or a numbered major to `lts` or `latest`), before applying anything: `firefox-sync: database.image.mysql is ... but the bundled database ... runs ...`. Set it back to the running image. With MariaDB and MySQL, `--set database.allowMajorUpgrade=true` upgrades in place (a backup first); set it back to `false` in the next upgrade, since `--reuse-values` keeps it and the next major would then go through too. PostgreSQL never: a dump and restore ([PostgreSQL](#postgresql)). While its `db-major` init container keeps it stopped on another major's data, its image may change, to go back to the major of the data. The check needs the cluster, so `helm template` skips it, and it does not see `lts` moving on under the same name: pin a major for that.
 - The chart's bundled accounts database (`fxa.enabled`) has the same check, with `fxa.database.allowMajorUpgrade`, which goes back to `false` after the move too: `firefox-sync: fxa.database.image.mysql is ... but the bundled accounts database ... runs ...`. From MySQL 8, move its users off `mysql_native_password` first ([MySQL 8 to 9](#mysql-8-to-9), step 2, with `kubectl exec sts/ffs-firefox-sync-fxa-db`), then one `helm upgrade` with `fxa.database.image.mysql: docker.io/library/mysql:lts` and `fxa.database.allowMajorUpgrade: true` moves it: the chart then drops the native password options (step 3) with the same upgrade.
-- The chart has no `FXA_MYSQL_ARGS`: it gives `fxa-db` the `mysql_native_password` options when `fxa.database.image.mysql` is a MySQL 8 pin (`docker.io/library/mysql:8`, `mysql:8.4`...), and none with any other image. Its default `mysql:lts` needs an accounts image with mozilla/fxa#21709, as ours have: with Mozilla's image (`fxa.image.repository: docker.io/mozilla/fxa-mono`) or one of ours from before, set `fxa.database.image.mysql: docker.io/library/mysql:8`. A chart cannot read the image's label, as `prepare_environment.sh` does; the NOTES say which applies.
+- The chart has no `FXA_MYSQL_ARGS`: it gives `fxa-db` the `mysql_native_password` options when `fxa.database.image.mysql` is a MySQL 8 pin (`docker.io/library/mysql:8`, `mysql:8.4`...), and none with any other image. Its default `mysql:lts` needs an accounts image with mozilla/fxa#21709: v1.350.0 and later, Mozilla's too (`fxa.image.repository: docker.io/mozilla/fxa-mono`), and ours. With an older release, Mozilla's or ours from before the patch, set `fxa.database.image.mysql: docker.io/library/mysql:8`. A chart cannot read the image's labels, as `prepare_environment.sh` does; the NOTES say which applies.
 
 ### MariaDB
 
@@ -382,7 +383,7 @@ The accounts' users come first. They are on `mysql_native_password`, and MySQL 9
 
 The accounts (`FXA_DB=mysql`):
 
-1. Use an accounts image with [mozilla/fxa#21709](https://github.com/mozilla/fxa/pull/21709), still on `mysql:8` with `FXA_MYSQL_ARGS`: upgrade as in [Self-hosted accounts](#self-hosted-accounts). Ours have it ([MySQL or MariaDB](accounts.md#mysql-or-mariadb)); with a pinned `FXA_VERSION`, use a release whose image has the label. `./prepare_environment.sh --upgrade` says when the image has it.
+1. Use an accounts image with [mozilla/fxa#21709](https://github.com/mozilla/fxa/pull/21709), still on `mysql:8` with `FXA_MYSQL_ARGS`: upgrade as in [Self-hosted accounts](#self-hosted-accounts). Every image of v1.350.0 and later has it, Mozilla's too, and ours of earlier releases built since the patch ([MySQL 9](accounts.md#mysql-9)); with a pinned `FXA_VERSION`, pin v1.350.0 or later. `./prepare_environment.sh --upgrade` says when the image has it.
 1. Move the users to `caching_sha2_password`. List the ones still on `mysql_native_password`:
 
     ```bash
@@ -438,4 +439,9 @@ To move to a newer major, dump and restore:
 
 `pg_upgrade` works too, but is not automated here: see [PostgreSQL's pg_upgrade](https://www.postgresql.org/docs/current/pgupgrade.html). With the Helm chart, the same with `database.image.postgres` and [Restore on Kubernetes](backups.md#restore-on-kubernetes).
 
-Tested: `PG_MAJOR_MOVE=1 tests/e2e.sh postgres` (in CI, syncstorage-rs.yml `test`): an install on the major before that of `postgres:latest`, with accounts and Sync data, then these three steps. Before the restore the new major refuses the old data and leaves it as it is; after it, the new major runs on the new volume and the same accounts read back the same items. Not tested: `pg_upgrade`, the Helm chart.
+Tested: `PG_MAJOR_MOVE=1 tests/e2e.sh postgres` (in CI, syncstorage-rs.yml `test`): an install on the major before that of `postgres:latest`, with accounts and Sync data, then these three steps. Today that is 18 to 19. Before the restore the new major refuses the old data and leaves it as it is; after it, the new major runs on the new volume and the same accounts read back the same items. Not tested: `pg_upgrade`, the Quadlets, the Helm chart.
+
+PostgreSQL 19 notes for the move:
+
+- PostgreSQL 19 has `standard_conforming_strings` always on. The backups have it on, as every server has by default, so they load into 19. A dump of a server set to `off`, made with a `pg_dump` before 19, does not load correctly into 19: dump such a server with the client of 19.
+- PostgreSQL 19 warns at each sign-in with an MD5 password. The stack's roles have SCRAM passwords (the default since 14). A role with an MD5 password from an older server gets a SCRAM one when its password is set again: [Change a database password](databases.md#change-a-database-password).
