@@ -664,6 +664,24 @@ jobs:
           echo "${{ secrets.GITHUB_TOKEN }}" | podman login ${{ env.REPOSITORY_REGISTRY }} -u ${{ github.repository_owner }} --password-stdin
           echo "${{ secrets.GITHUB_TOKEN }}" | docker login ${{ env.REPOSITORY_REGISTRY }} -u ${{ github.repository_owner }} --password-stdin
 
+      # A new fork needs a tested Sync release before fxa.yml can publish its first FxA
+      # image. Exercise the same Quadlets with the published upstream FxA in that case.
+      - name: Select the accounts image for the first Sync release
+        if: github.event.repository.fork && !matrix.skip_fxa
+        run: |
+          image="${REPOSITORY_REGISTRY}/${REPOSITORY_FULL_NAME,,}:fxa-mono-latest"
+          if error=$(docker buildx imagetools inspect "${image}" 2>&1 >/dev/null); then
+            exit 0
+          fi
+          if [[ "${error}" != "ERROR: ${image}: not found" ]]; then
+            echo "${error}" >&2
+            exit 1
+          fi
+          upstream=ghcr.io/porelli/firefox-sync
+          digest=$(docker buildx imagetools inspect "${upstream}:fxa-mono-latest" --format '{{.Manifest.Digest}}')
+          echo "Testing with upstream FxA ${upstream}@${digest} until ${image} is published"
+          echo "FXA_TEST_IMAGE=${upstream}@${digest}" >> "${GITHUB_ENV}"
+
       - name: Podman tests
         env:
           REPOSITORY: ${{ env.REPOSITORY_REGISTRY }}/${{ env.REPOSITORY_FULL_NAME }}
