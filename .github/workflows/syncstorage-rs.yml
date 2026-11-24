@@ -843,8 +843,15 @@ jobs:
             $(printf '${{ env.REPOSITORY_REGISTRY }}/${{ env.REPOSITORY_FULL_NAME }}@sha256:%s ' *)
 
       - name: Inspect image
+        env:
+          IMAGE: ${{ env.REPOSITORY_REGISTRY }}/${{ env.REPOSITORY_FULL_NAME }}:${{ env.SERVICE_NAME }}-${{ steps.image_name.outputs.docker_image_name_suffix }}-latest
         run: |
-          docker buildx imagetools inspect ${{ env.REPOSITORY_REGISTRY }}/${{ env.REPOSITORY_FULL_NAME }}:${{ env.SERVICE_NAME }}-${{ steps.image_name.outputs.docker_image_name_suffix }}-latest
+          # A newly pushed tag can briefly return "not found" from GHCR.
+          for delay in 2 4 8 16; do
+            docker buildx imagetools inspect "${IMAGE}" && exit 0
+            sleep "${delay}"
+          done
+          docker buildx imagetools inspect "${IMAGE}"
 
   ## An entry of upstream-patches.yml in the release now (not applied any more) ##
   # red until it is removed and its when_released done; after publishing, not holding it back

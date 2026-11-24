@@ -304,7 +304,7 @@ compose_test() {
   for pair in "${RENAMED_SETTINGS[@]}"; do sed -i "s|^${pair%%=*}=|${pair#*=}=|" .env; done
   old_lines=$(grep -cE "^($(IFS='|'; echo "${RENAMED_SETTINGS[*]#*=}"))=" .env)
   dcp_timeout 600 up -d > "compose-${backend}.log" 2>&1
-  check "$?" 0 "docker compose up, before ADMIN_DB_PASSWORD, with the old setting names (${backend})"
+  check "$?" 0 "docker compose up, before ADMIN_DB_PASSWORD, with the old setting names (${backend})" || diagnose "compose-${backend}.log"
   check "$(podman logs "$(ctr tokenserver_db_init)" 2>&1 | grep -c 'WARNING: settings under their old names, in .env or in the environment docker compose runs in')" 1 "the init container warns of the old setting names (${backend})"
   check "$(admin_up /login)" 200 "admin UI before ADMIN_DB_PASSWORD (compose, ${backend})"
   compose_sql "${backend}" "${sync_user}" "${sync_password}" "${sync_db}" \
@@ -1077,7 +1077,7 @@ check "$(hb)" 200 "/__heartbeat__ (quadlets, no admin UI)"
 check "$(journalctl --user -u firefox-sync-syncstorage.service --since "${QUADLET_SINCE}" --no-pager 2> /dev/null | grep -c 'Sending metrics')" 0 \
   "no metrics host without the admin UI (quadlets)"
 if [ "${FAILED}" != 0 ]; then
-  tail -20 setup-no-admin.log quadlet-no-admin-dryrun.log
+  tail -n 20 setup-no-admin.log quadlet-no-admin-dryrun.log
   journalctl --user -u 'firefox-sync-*' --since "${QUADLET_SINCE}" --no-pager | tail -40
 fi
 
